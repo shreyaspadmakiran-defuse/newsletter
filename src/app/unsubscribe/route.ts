@@ -1,6 +1,7 @@
-import { unsubscribeByToken } from "@/lib/subscribers";
-
 export const runtime = "nodejs";
+
+// View-only unsubscribe. There's no subscriber store to update; this exists so
+// the List-Unsubscribe header points somewhere valid and shows a confirmation.
 
 function page(title: string, body: string): Response {
   const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
@@ -13,20 +14,13 @@ function page(title: string, body: string): Response {
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
 }
 
-// Link click from the email footer.
 export async function GET(req: Request) {
-  const token = new URL(req.url).searchParams.get("token");
-  if (!token) return page("Invalid link", "This unsubscribe link is missing its token.");
-  if (token === "preview") return page("Preview link", "This is a preview unsubscribe link.");
-
-  const sub = await unsubscribeByToken(token);
-  if (!sub) return page("Link not found", "This unsubscribe link is invalid or expired.");
-  return page("You’re unsubscribed", `${sub.email} will no longer receive these emails.`);
+  const email = new URL(req.url).searchParams.get("email");
+  const who = email ? email.replace(/[<>&"]/g, "") : "You";
+  return page("You’re unsubscribed", `${who} will no longer receive these emails.`);
 }
 
-// One-click unsubscribe (RFC 8058). Gmail and Yahoo POST here directly.
-export async function POST(req: Request) {
-  const token = new URL(req.url).searchParams.get("token");
-  if (token && token !== "preview") await unsubscribeByToken(token);
+// One-click unsubscribe (RFC 8058) — Gmail/Yahoo POST here. No-op, returns 200.
+export async function POST() {
   return new Response(null, { status: 200 });
 }

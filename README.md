@@ -4,32 +4,31 @@ A branded email service for product announcements. You keep a list of recipient 
 write an announcement, and send it as a styled email that links to the full write-up in
 your docs changelog.
 
-The recipient list is held in memory and is meant to be imported from an external API
-(with manual add/upload as a fallback). Mail is sent through your own Gmail account, so
-there is no third-party sending service and no domain to verify.
+**Drafts** and the **recipient list** are saved in **Postgres** (Vercel Postgres). You curate
+recipients on a `/recipients` page (paste/upload, or wire an API import later). Mail is sent
+through your own Gmail account, so there is no third-party sending service and no domain to
+verify.
 
 ## How it works
 
 ```
-Recipients live in an in-memory store (resets on restart):
+Recipients (saved list, managed on /recipients):
 
-  external API  ->  POST /api/subscribers/import  \
-  compose page  ->  POST /api/subscribers          >-->  in-memory store
-  CLI import    ->                                 /
+  paste / upload  ->  POST /api/recipients          \
+  external API    ->  POST /api/recipients/import     >-->  Postgres (recipients)
 
 Sending an announcement:
 
-  content/announcements/<slug>.ts   (or the /compose form)
-        |
-        |  render with emails/AnnouncementEmail.tsx + emails/brand.ts
+  /compose form  ->  POST /api/send  ->  Gmail (SMTP)  ->  selected recipients
+        |                  |
+        |                  \--  records recipients + time on the draft (Postgres)
         v
-  branded HTML  -->  Gmail (SMTP)  -->  selected recipients
-        |
-        \--  the email's button links to changelogUrl in your docs
+  render with emails/AnnouncementEmail.tsx + emails/brand.ts;
+  the email's button links to changelogUrl in your docs
 ```
 
-Each recipient gets a per-recipient unsubscribe link and a one-click `List-Unsubscribe`
-header. Unsubscribing marks them in the store and excludes them from future sends.
+Each email carries a one-click `List-Unsubscribe` header pointing at a view-only
+`/unsubscribe` page (there's no suppression list — recipients come from your API each time).
 
 ## Setup
 
@@ -48,8 +47,18 @@ App Password at https://myaccount.google.com/apppasswords, and set:
 | `MAIL_FROM_NAME` | Display name on the From line, e.g. `NEAR Intents` |
 | `MAIL_REPLY_TO` | Optional reply-to address |
 | `NEXT_PUBLIC_APP_URL` | Public URL of this app, used to build unsubscribe links |
+| `DATABASE_URL` | Postgres connection string (Vercel Postgres exposes `POSTGRES_URL`) |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Google OAuth client (see Access control) |
+| `AUTH_SECRET` | Session secret — `openssl rand -base64 32` |
 
 Gmail limits: ~500 sends/day on personal Gmail, ~2,000 on Workspace.
+
+Then create the tables:
+
+```bash
+pnpm db:push        # apply the schema to the database in DATABASE_URL
+# pnpm db:studio    # optional: browse the data
+```
 
 ## Run
 
@@ -58,31 +67,24 @@ pnpm dev          # app at http://localhost:3000
 pnpm email:dev    # template preview at http://localhost:3030
 ```
 
-- `/compose` is the admin page: manage recipients, write an announcement, and send.
+- `/compose` — write an announcement, pick recipients, save drafts, and send.
+- `/recipients` — manage the saved recipient list (add / paste / upload / remove).
+- `/drafts` — every saved draft with its status (Draft / Sent), send time, and recipients.
 - `/` redirects to `/compose`.
 
 ## Managing recipients
 
-The list lives in an in-memory store (`src/lib/subscribers.ts`) that resets on restart.
-Three ways to fill it:
+The recipient list is stored in Postgres (`recipients` table) and managed on **`/recipients`**:
 
-1. **Import from your API** — the **Import** button on `/compose` calls
-   [`fetchEmailsFromApi()`](src/lib/importSource.ts) and loads the result. That function is
-   a **TODO stub** right now; wire it to your endpoint (see "Importing from an external API"
-   below). This is the intended primary source.
-2. **Manual** — the `/compose` recipients panel: paste one email or many (new lines, commas,
-   or spaces), or upload a `.csv` / `.txt`.
-3. **CLI:**
+- **Paste** one email or many (new lines, commas, or spaces), or **upload** a `.csv` / `.txt`.
+- Remove any with the ✕. Adds are idempotent (duplicates are skipped).
 
-```bash
-pnpm contacts list                  # show the stored list
-pnpm contacts import emails.txt      # add from a file, skip duplicates
-pnpm contacts import emails.txt --dry
-```
+On `/compose`, the recipients panel loads this saved list; check who a send goes to (all
+selected by default). To wire an external API as the source, see below.
 
 ## Importing from an external API
 
-The **Import** button hits `POST /api/subscribers/import`, which calls
+The **Import** button hits `POST /api/recipients/import`, which calls
 [`fetchEmailsFromApi()`](src/lib/importSource.ts). That function currently throws — replace
 its body with a real fetch to your API and return `{ email }[]`:
 
@@ -98,7 +100,8 @@ export async function fetchEmailsFromApi(): Promise<ImportedEmail[]> {
 ```
 
 Add `EMAIL_SOURCE_API_URL` / `EMAIL_SOURCE_API_KEY` to `.env.local` when you wire it up.
-Import is idempotent: it skips emails already in the store, so you can click it repeatedly.
+`POST /api/recipients/import` then adds the fetched emails to the saved recipient list
+(idempotent). Until wired, that route returns a clear "not configured" error.
 
 ## Sending an announcement
 
@@ -117,18 +120,28 @@ Sending goes out through your Gmail account.
 - **Download .html** saves the rendered email to a file (the same output as
   `pnpm send <slug> --html out.html`).
 
-### From the CLI
+### From the CLI (content files)
 
-Write `content/announcements/<slug>.ts` (copy an existing file), then:
+For a version-controlled announcement, write `content/announcements/<slug>.ts` (copy an
+existing file), then preview or test it:
 
 ```bash
 pnpm send <slug> --html out.html          # render to a file, no send
-pnpm send <slug> --test you@example.com    # send one test email
-pnpm send <slug>                           # print how many active recipients would get it
-pnpm send <slug> --send                    # send to every active subscriber
+pnpm send <slug> --test you@example.com    # send one test email via Gmail
 ```
 
-Send a test to yourself first, check it, then send for real.
+Sending to a recipient list is done in the web app, not the CLI.
+
+## Drafts
+
+`/compose` saves what you've written to Postgres and reloads it later; `/drafts` lists them all.
+
+- **Save draft** stores the current fields (creates a new draft, or updates the loaded one).
+- The **Draft** dropdown loads a saved draft into the form. **New** clears it; **Delete**
+  removes the selected one.
+- Sending marks the draft **sent** and records the recipient list + time. The **`/drafts`**
+  page shows each draft's status, when it was sent, and to whom (expandable recipient list).
+- Open any draft from `/drafts` via its **Open** button (`/compose?draft=<id>`).
 
 ## Writing an announcement
 
@@ -155,6 +168,21 @@ export default defineAnnouncement({
 
 Write the gist in the email. Keep the detail in the docs and link to it with `changelogUrl`.
 
+## Access control
+
+`/compose`, `/recipients`, `/drafts`, and the admin API routes are gated by **Google sign-in
+restricted to `@defuse.org`** (Auth.js). Unauthenticated users are redirected to `/signin`;
+non-`defuse.org` accounts are rejected. `/unsubscribe` and `/api/auth/*` stay public.
+
+Set it up with a Google OAuth client (Cloud Console → Credentials → OAuth client ID → Web),
+authorized redirect URIs:
+
+- `http://localhost:3000/api/auth/callback/google`
+- `https://<your-vercel-url>/api/auth/callback/google`
+
+Put its ID/secret in `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`, and set `AUTH_SECRET`. The
+allowed domain is `defuse.org` in [`src/auth.ts`](src/auth.ts).
+
 ## Branding
 
 Colors, logo, and footer are in [`emails/brand.ts`](emails/brand.ts). Change them and the
@@ -166,21 +194,25 @@ stricter clients (e.g. Outlook) may not show SVG, so swap in a hosted PNG if tha
 ```
 emails/            branded template (AnnouncementEmail.tsx) + brand tokens (brand.ts)
 content/           announcement files + the Announcement type
-src/app/           the /compose page and API routes
-src/lib/           in-memory subscriber store, importSource (API stub), mailer (Gmail), send, render
-scripts/           send and contacts CLIs
+src/db/            Drizzle schema + client (Postgres) — drafts + recipients tables
+src/app/           /compose, /recipients, /drafts, /unsubscribe, and API routes
+src/lib/           drafts, recipients, importSource (API stub), mailer (Gmail), send, render
+scripts/           send CLI (render / test one email)
+drizzle/           generated SQL migrations
 ```
 
 ## Deploy
 
-Push to GitHub and import into Vercel. Set the same env vars in the project settings. You
-get a permanent URL at `/compose` to manage recipients and send.
+1. Push to GitHub and import the repo into Vercel.
+2. Add a **Vercel Postgres** database to the project (Storage tab) — it injects `POSTGRES_URL`,
+   which the app reads. Add the Gmail vars and `NEXT_PUBLIC_APP_URL` under Settings → Environment
+   Variables.
+3. Create the tables: run `pnpm db:push` locally against the same connection string (paste it as
+   `DATABASE_URL` in `.env.local`), or apply `drizzle/*.sql` to the database.
 
-Two things to handle before a public deploy:
+You then get a permanent URL at `/compose` to manage recipients, save drafts, and send.
 
-- The admin area has no login. Put `/compose` and the `/api/subscribers` routes behind auth.
-- The store is in-memory, so it resets on restart (and, on serverless, is not shared across
-  instances). That's fine when you re-import from your API on each session; if you need the
-  list to persist, replace the `store` array in `src/lib/subscribers.ts` with a database
-  (Neon Postgres or Vercel KV). The exported functions are the interface; callers don't change.
+For auth on the deployed URL: add `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, and `AUTH_SECRET` to
+the Vercel env vars, and add `https://<your-vercel-url>/api/auth/callback/google` to the Google
+OAuth client's authorized redirect URIs. Access is limited to `@defuse.org` accounts.
 ```

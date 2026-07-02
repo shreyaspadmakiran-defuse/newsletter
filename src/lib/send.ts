@@ -1,6 +1,5 @@
 import { getMailer } from "./mailer";
 import { renderAnnouncementHtml, renderAnnouncementText } from "./renderEmail";
-import { activeSubscribers } from "./subscribers";
 import type { Announcement } from "../../content/types";
 
 const UNSUB_PLACEHOLDER = "%%UNSUB%%";
@@ -9,13 +8,15 @@ function appUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/+$/, "");
 }
 
-function unsubUrl(token: string): string {
-  return `${appUrl()}/unsubscribe?token=${encodeURIComponent(token)}`;
+// View-only unsubscribe link (no suppression store). Satisfies the
+// List-Unsubscribe header; the /unsubscribe page just shows a confirmation.
+function unsubUrl(email: string): string {
+  return `${appUrl()}/unsubscribe?email=${encodeURIComponent(email)}`;
 }
 
 /** Send a single test email (subject prefixed [TEST]). */
 export async function sendTest(announcement: Announcement, to: string) {
-  const html = await renderAnnouncementHtml(announcement, `${appUrl()}/unsubscribe?token=preview`);
+  const html = await renderAnnouncementHtml(announcement, unsubUrl(to));
   const text = await renderAnnouncementText(announcement);
   return getMailer().send({ to, subject: `[TEST] ${announcement.title}`, html, text });
 }
@@ -23,19 +24,15 @@ export async function sendTest(announcement: Announcement, to: string) {
 export type SendResult = { requested: number; sent: number; failed: number; errors: string[] };
 
 /**
- * Send the announcement to the given emails. Only addresses in the store and
- * still subscribed are mailed. Each recipient gets their own unsubscribe link
- * and one-click List-Unsubscribe header. Sent one at a time through Gmail.
+ * Send the announcement to the given emails via Gmail, one at a time. Each
+ * recipient gets a view-only unsubscribe link + one-click List-Unsubscribe
+ * header.
  */
 export async function sendToRecipients(
   announcement: Announcement,
   emails: string[],
 ): Promise<SendResult> {
-  const active = new Map((await activeSubscribers()).map((s) => [s.email, s]));
-  const targets = [...new Set(emails.map((e) => e.trim().toLowerCase()))]
-    .map((e) => active.get(e))
-    .filter((s): s is NonNullable<typeof s> => Boolean(s));
-
+  const targets = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
   const result: SendResult = { requested: emails.length, sent: 0, failed: 0, errors: [] };
   if (targets.length === 0) return result;
 
@@ -44,10 +41,10 @@ export async function sendToRecipients(
   const baseHtml = await renderAnnouncementHtml(announcement, UNSUB_PLACEHOLDER);
   const text = await renderAnnouncementText(announcement);
 
-  for (const s of targets) {
-    const url = unsubUrl(s.token);
+  for (const email of targets) {
+    const url = unsubUrl(email);
     const { error } = await mailer.send({
-      to: s.email,
+      to: email,
       subject,
       html: baseHtml.split(UNSUB_PLACEHOLDER).join(url),
       text,
@@ -58,7 +55,7 @@ export async function sendToRecipients(
     });
     if (error) {
       result.failed++;
-      result.errors.push(`${s.email}: ${error}`);
+      result.errors.push(`${email}: ${error}`);
     } else {
       result.sent++;
     }

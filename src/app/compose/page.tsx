@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Form = {
@@ -12,16 +14,26 @@ type Form = {
   cta: string;
 };
 
-type Subscriber = { email: string; unsubscribed: boolean };
+type DraftMeta = { id: number; title: string; status: "draft" | "sent" };
+
+const EMPTY: Form = {
+  label: "",
+  title: "",
+  preview: "",
+  summary: "",
+  highlights: "",
+  changelogUrl: "",
+  cta: "",
+};
 
 const EXAMPLE: Form = {
   label: "New · Security",
   title: "The SHIELD Incident API is live",
   preview: "See ongoing incidents in real time, and report your own.",
   summary:
-    "The SHIELD Incident API is now available. It reports any ongoing incident in real time, pulling directly from our internal circuit breakers and SHIELD.\n\nA GET request returns either `operational` or the current list of active incidents, each scoped to an affected chain, bridge, token, or address. You can also POST an incident from your own systems. While an incident is active, SHIELD halts evaluation for the matching scope.",
+    "The SHIELD Incident API is now available. It reports any ongoing incident in real time, pulling directly from our internal circuit breakers and SHIELD.\n\nA GET request returns either `operational` or the current list of active incidents, each scoped to an affected chain, bridge, token, or address.",
   highlights:
-    "Pull active incidents in real time from one endpoint\nReport incidents from your own systems, scoped to a chain, bridge, token, or address\nBacked by our circuit breakers and SHIELD: active incidents halt evaluation for the affected scope",
+    "Pull active incidents in real time from one endpoint\nReport incidents from your own systems\nBacked by our circuit breakers and SHIELD",
   changelogUrl: "https://docs.near-intents.org/security-compliance/shield-incident-api",
   cta: "Read the docs",
 };
@@ -29,30 +41,75 @@ const EXAMPLE: Form = {
 export default function ComposePage() {
   const [form, setForm] = useState<Form>(EXAMPLE);
   const [html, setHtml] = useState("");
-  const [subs, setSubs] = useState<Subscriber[]>([]);
+  const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+
+  // Recipients are loaded from the saved list (managed on /recipients).
+  const [recipients, setRecipients] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [newEmail, setNewEmail] = useState("");
+
   const [testEmail, setTestEmail] = useState("");
   const [busy, setBusy] = useState<null | "test" | "send">(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+
+  const [drafts, setDrafts] = useState<DraftMeta[]>([]);
+  const [currentDraftId, setCurrentDraftId] = useState<number | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+
   const debounce = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
-  // Load subscribers (all active ones selected by default).
-  const loadSubs = useCallback(async () => {
-    const res = await fetch("/api/subscribers");
-    const data = await res.json();
-    const list: Subscriber[] = data.subscribers ?? [];
-    setSubs(list);
-    setSelected(new Set(list.filter((s) => !s.unsubscribed).map((s) => s.email)));
+  const loadDrafts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/drafts");
+      const data = await res.json();
+      if (res.ok) setDrafts(data.drafts ?? []);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
+  const applyDraft = useCallback((d: Record<string, string> & { id: number }) => {
+    setCurrentDraftId(d.id);
+    setForm({
+      label: d.label ?? "",
+      title: d.title ?? "",
+      preview: d.preview ?? "",
+      summary: d.summary ?? "",
+      highlights: d.highlights ?? "",
+      changelogUrl: d.changelogUrl ?? "",
+      cta: d.cta ?? "",
+    });
+    setStatus(null);
+  }, []);
+
+  const loadRecipients = useCallback(async () => {
+    try {
+      const res = await fetch("/api/recipients");
+      const data = await res.json();
+      if (res.ok) {
+        const list: string[] = data.recipients ?? [];
+        setRecipients(list);
+        setSelected(new Set(list));
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  // Load drafts + recipients, and a specific draft if ?draft=<id> is in the URL.
   useEffect(() => {
-    loadSubs();
-  }, [loadSubs]);
+    loadDrafts();
+    loadRecipients();
+    const id = new URLSearchParams(window.location.search).get("draft");
+    if (id) {
+      fetch(`/api/drafts/${id}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => d?.draft && applyDraft(d.draft))
+        .catch(() => {});
+    }
+  }, [loadDrafts, loadRecipients, applyDraft]);
 
   // Debounced live preview.
   const renderPreview = useCallback(async (f: Form) => {
@@ -65,7 +122,7 @@ export default function ComposePage() {
       const data = await res.json();
       if (res.ok) setHtml(data.html);
     } catch {
-      /* ignore while typing */
+      /* ignore */
     }
   }, []);
 
@@ -83,67 +140,52 @@ export default function ComposePage() {
     });
   }
 
-  // Accepts one email or many (any separators: newlines, commas, spaces).
-  async function addEmails(text: string) {
-    if (!text.trim()) return;
-    const res = await fetch("/api/subscribers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus({ kind: "err", msg: data.error });
-      return;
-    }
-    setNewEmail("");
-    await loadSubs();
-    // Auto-select everything just added.
-    const added = text
-      .split(/[\s,;]+/)
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean);
-    setSelected((prev) => new Set([...prev, ...added]));
-    if (data.message) setStatus({ kind: "ok", msg: data.message });
+  // ── Drafts ──────────────────────────────────────────────────────────────
+  function newDraft() {
+    setCurrentDraftId(null);
+    setForm(EMPTY);
+    setStatus(null);
   }
 
-  async function onUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await addEmails(await file.text());
-    e.target.value = ""; // allow re-uploading the same file
+  function loadDraftById(id: number) {
+    fetch(`/api/drafts/${id}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.draft && applyDraft(d.draft))
+      .catch(() => {});
   }
 
-  const [importing, setImporting] = useState(false);
-  async function importFromApi() {
-    setImporting(true);
+  async function saveDraft() {
+    setSavingDraft(true);
     setStatus(null);
     try {
-      const res = await fetch("/api/subscribers/import", { method: "POST" });
+      const res = await fetch(currentDraftId ? `/api/drafts/${currentDraftId}` : "/api/drafts", {
+        method: currentDraftId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
       const data = await res.json();
       if (res.ok) {
-        await loadSubs();
-        setStatus({ kind: "ok", msg: data.message });
+        if (data.draft?.id) setCurrentDraftId(data.draft.id);
+        await loadDrafts();
+        setStatus({ kind: "ok", msg: "Draft saved." });
       } else {
         setStatus({ kind: "err", msg: data.error });
       }
     } catch {
       setStatus({ kind: "err", msg: "Network error." });
     } finally {
-      setImporting(false);
+      setSavingDraft(false);
     }
   }
 
-  async function removeEmail(email: string) {
-    await fetch("/api/subscribers", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    await loadSubs();
+  async function deleteCurrentDraft() {
+    if (!currentDraftId) return;
+    await fetch(`/api/drafts/${currentDraftId}`, { method: "DELETE" });
+    newDraft();
+    await loadDrafts();
   }
 
-  // Opens the confirmation modal for a real send.
+  // ── Send ──────────────────────────────────────────────────────────────────
   function requestSend() {
     setStatus(null);
     if (selected.size === 0) {
@@ -159,21 +201,29 @@ export default function ComposePage() {
       setStatus({ kind: "err", msg: "Enter a test email address first." });
       return;
     }
-    const recipients = [...selected];
-    if (mode === "send" && recipients.length === 0) {
-      setStatus({ kind: "err", msg: "Select at least one recipient." });
-      return;
-    }
-
     setBusy(mode);
     try {
       const res = await fetch("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ announcement: form, mode, to: testEmail || undefined, recipients }),
+        body: JSON.stringify({
+          announcement: form,
+          mode,
+          to: testEmail || undefined,
+          recipients: [...selected],
+          draftId: currentDraftId ?? undefined,
+        }),
       });
       const data = await res.json();
-      setStatus(res.ok ? { kind: "ok", msg: data.message } : { kind: "err", msg: data.error });
+      if (res.ok) {
+        setStatus({ kind: "ok", msg: data.message });
+        if (mode === "send") {
+          if (data.draftId) setCurrentDraftId(data.draftId);
+          await loadDrafts();
+        }
+      } else {
+        setStatus({ kind: "err", msg: data.error });
+      }
     } catch {
       setStatus({ kind: "err", msg: "Network error." });
     } finally {
@@ -181,50 +231,68 @@ export default function ComposePage() {
     }
   }
 
-  async function copyForGmail() {
-    if (!html) return;
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          "text/html": new Blob([html], { type: "text/html" }),
-          "text/plain": new Blob([html], { type: "text/plain" }),
-        }),
-      ]);
-      setStatus({ kind: "ok", msg: "Copied. Paste into a Gmail compose window (Cmd/Ctrl+V), add recipients, and send." });
-    } catch {
-      setStatus({ kind: "err", msg: "Browser blocked the clipboard. Use Download .html instead." });
-    }
-  }
-
-  function downloadHtml() {
-    if (!html) return;
-    const slug =
-      (form.title || "email").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "email";
-    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${slug}.html`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  const activeCount = subs.filter((s) => !s.unsubscribed).length;
-
   return (
     <main className="min-h-screen bg-zinc-50 text-zinc-900">
       <div className="mx-auto max-w-6xl px-6 py-8">
-        <header className="mb-6">
-          <h1 className="text-xl font-semibold">Compose announcement</h1>
-          <p className="text-sm text-zinc-500">
-            Write it, pick recipients, send a test, then send for real.
-          </p>
+        <header className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold">Compose announcement</h1>
+            <p className="text-sm text-zinc-500">Write it, pick recipients, send.</p>
+          </div>
+          <nav className="flex items-center gap-4 text-sm">
+            <Link href="/recipients" className="font-medium text-zinc-600 hover:text-zinc-900">
+              Recipients
+            </Link>
+            <Link href="/drafts" className="font-medium text-zinc-600 hover:text-zinc-900">
+              Drafts
+            </Link>
+            <button
+              onClick={() => signOut({ callbackUrl: "/signin" })}
+              className="font-medium text-zinc-400 hover:text-zinc-900"
+            >
+              Sign out
+            </button>
+          </nav>
         </header>
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
           {/* Left column */}
           <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-200 bg-white p-3">
+              <span className="text-sm font-medium text-zinc-700">Draft</span>
+              <select
+                className="rounded-lg border border-zinc-300 bg-white px-2 py-1.5 text-sm"
+                value={currentDraftId ?? ""}
+                onChange={(e) => (e.target.value ? loadDraftById(Number(e.target.value)) : newDraft())}
+              >
+                <option value="">New (unsaved)</option>
+                {drafts.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.title || "(untitled)"}
+                    {d.status === "sent" ? " · sent" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={saveDraft}
+                disabled={savingDraft}
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-50 disabled:opacity-50"
+              >
+                {savingDraft ? "Saving…" : currentDraftId ? "Save" : "Save draft"}
+              </button>
+              <button
+                onClick={newDraft}
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium hover:bg-zinc-50"
+              >
+                New
+              </button>
+              {currentDraftId !== null && (
+                <button onClick={deleteCurrentDraft} className="ml-auto text-sm text-zinc-400 hover:text-red-600">
+                  Delete
+                </button>
+              )}
+            </div>
+
             <Field label="Eyebrow label (optional)">
               <input className={inputCls} value={form.label} onChange={set("label")} />
             </Field>
@@ -251,21 +319,13 @@ export default function ComposePage() {
             <div className="rounded-xl border border-zinc-200 bg-white p-4">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-sm font-medium text-zinc-700">
-                  Recipients · {selected.size}/{activeCount} selected
+                  Recipients · {selected.size}/{recipients.length} selected
                 </span>
                 <div className="flex flex-wrap gap-3 text-xs">
-                  <button
-                    className="font-medium text-[#fb4d01] hover:underline disabled:opacity-50"
-                    onClick={importFromApi}
-                    disabled={importing}
-                    title="Pull emails from the external API"
-                  >
-                    {importing ? "Importing…" : "Import"}
-                  </button>
-                  <button
-                    className="text-zinc-500 hover:text-zinc-900"
-                    onClick={() => setSelected(new Set(subs.filter((s) => !s.unsubscribed).map((s) => s.email)))}
-                  >
+                  <Link href="/recipients" className="font-medium text-[#fb4d01] hover:underline">
+                    Manage
+                  </Link>
+                  <button className="text-zinc-500 hover:text-zinc-900" onClick={() => setSelected(new Set(recipients))}>
                     Select all
                   </button>
                   <button className="text-zinc-500 hover:text-zinc-900" onClick={() => setSelected(new Set())}>
@@ -274,61 +334,20 @@ export default function ComposePage() {
                 </div>
               </div>
 
-              <div className="mb-3 flex flex-col gap-2">
-                <textarea
-                  className={inputCls}
-                  rows={2}
-                  placeholder="paste one email, or many, separated by new lines, commas, or spaces"
-                  value={newEmail}
-                  onChange={(e) => setNewEmail(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault();
-                      addEmails(newEmail);
-                    }
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => addEmails(newEmail)}
-                    className="shrink-0 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-50"
-                  >
-                    Add emails
-                  </button>
-                  <label className="shrink-0 cursor-pointer rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium hover:bg-zinc-50">
-                    Upload .csv / .txt
-                    <input type="file" accept=".csv,.txt,text/plain,text/csv" className="hidden" onChange={onUploadFile} />
-                  </label>
-                  <span className="text-xs text-zinc-400">⌘/Ctrl+Enter to add</span>
-                </div>
-              </div>
-
               <div className="max-h-56 overflow-auto">
-                {subs.length === 0 ? (
+                {recipients.length === 0 ? (
                   <p className="py-6 text-center text-sm text-zinc-400">
-                    No recipients yet. Add one above, or from the subscribe page.
+                    No recipients yet.{" "}
+                    <Link href="/recipients" className="text-[#fb4d01] hover:underline">
+                      Add some →
+                    </Link>
                   </p>
                 ) : (
                   <ul className="flex flex-col gap-1">
-                    {subs.map((s) => (
-                      <li key={s.email} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-zinc-50">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(s.email)}
-                          disabled={s.unsubscribed}
-                          onChange={() => toggle(s.email)}
-                        />
-                        <span className={`flex-1 text-sm ${s.unsubscribed ? "text-zinc-300 line-through" : ""}`}>
-                          {s.email}
-                          {s.unsubscribed && <span className="ml-2 text-xs">unsubscribed</span>}
-                        </span>
-                        <button
-                          onClick={() => removeEmail(s.email)}
-                          className="text-xs text-zinc-400 hover:text-red-600"
-                          title="Remove from list"
-                        >
-                          ✕
-                        </button>
+                    {recipients.map((email) => (
+                      <li key={email} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-zinc-50">
+                        <input type="checkbox" checked={selected.has(email)} onChange={() => toggle(email)} />
+                        <span className="flex-1 text-sm">{email}</span>
                       </li>
                     ))}
                   </ul>
@@ -364,9 +383,7 @@ export default function ComposePage() {
             </div>
 
             {status && (
-              <p className={`text-sm ${status.kind === "ok" ? "text-emerald-600" : "text-red-600"}`}>
-                {status.msg}
-              </p>
+              <p className={`text-sm ${status.kind === "ok" ? "text-emerald-600" : "text-red-600"}`}>{status.msg}</p>
             )}
           </div>
 
@@ -376,16 +393,39 @@ export default function ComposePage() {
               <span className="text-xs font-medium uppercase tracking-wide text-zinc-400">Live preview</span>
               <div className="flex gap-2">
                 <button
-                  onClick={copyForGmail}
+                  onClick={async () => {
+                    if (!html) return;
+                    try {
+                      await navigator.clipboard.write([
+                        new ClipboardItem({
+                          "text/html": new Blob([html], { type: "text/html" }),
+                          "text/plain": new Blob([html], { type: "text/plain" }),
+                        }),
+                      ]);
+                      setStatus({ kind: "ok", msg: "Copied. Paste into Gmail (Cmd/Ctrl+V) and send." });
+                    } catch {
+                      setStatus({ kind: "err", msg: "Clipboard blocked. Use Download .html." });
+                    }
+                  }}
                   className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-                  title="Copy the email as rich HTML, then paste into a Gmail compose window"
                 >
                   Copy for Gmail
                 </button>
                 <button
-                  onClick={downloadHtml}
+                  onClick={() => {
+                    if (!html) return;
+                    const slug =
+                      (form.title || "email").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "email";
+                    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${slug}.html`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                  }}
                   className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-                  title="Download the rendered email as an .html file"
                 >
                   Download .html
                 </button>
@@ -399,21 +439,17 @@ export default function ComposePage() {
           </div>
         </div>
       </div>
+
       {confirmOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => setConfirmOpen(false)}
         >
-          <div
-            className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-zinc-900">
               Send to {selected.size} recipient{selected.size === 1 ? "" : "s"}?
             </h2>
-            <p className="mt-2 text-sm text-zinc-600">
-              This sends the email now and cannot be undone.
-            </p>
+            <p className="mt-2 text-sm text-zinc-600">This sends the email now and cannot be undone.</p>
             <div className="mt-5 flex justify-end gap-3">
               <button
                 onClick={() => setConfirmOpen(false)}
