@@ -1,27 +1,28 @@
 /**
- * An announcement is one small typed file. The `summary` (and optional
- * `highlights`) are the "gist" that goes in the email; `changelogUrl` links to
- * the full write-up in the docs changelog. Author one file per announcement in
+ * One announcement per file. `summary` and `highlights` are the email body;
+ * `changelogUrl` links to the full write-up in the docs. Author a file in
  * content/announcements/ and send it with `pnpm send <slug>`.
  */
 export type Announcement = {
-  /** URL-safe id, must match the filename (e.g. "cross-chain-withdrawals"). */
+  /** URL-safe id. Must match the filename (e.g. "cross-chain-withdrawals"). */
   slug: string;
-  /** Email subject line + headline. */
+  /** Optional eyebrow tag above the title, e.g. "New feature". */
+  label?: string;
+  /** Email subject line and headline. */
   title: string;
-  /** One-line teaser shown as email preview text (inbox preview). */
+  /** Inbox preview text (the grey line next to the subject). */
   preview: string;
-  /** The gist — 1–3 short paragraphs. Plain text; blank strings are ignored. */
+  /** Body paragraphs. Blank strings are dropped. */
   summary: string[];
-  /** Optional bullet highlights ("what's new"). */
+  /** Optional bullet list under the summary. */
   highlights?: string[];
-  /** Link to the full write-up in the docs changelog. */
+  /** Link the button points to (the docs changelog page). */
   changelogUrl: string;
-  /** Call-to-action button label. */
+  /** Button label. Defaults to "Read the full changelog". */
   cta?: string;
 };
 
-/** Small helper so each announcement file gets full type-checking + inference. */
+/** Type-checks an announcement object as you write it. */
 export function defineAnnouncement(a: Announcement): Announcement {
   return a;
 }

@@ -10,3 +10,12 @@ body {
   padding: 0;
   margin: 0;
 }
+
+button:not(:disabled),
+label:has(> input[type="file"]) {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
