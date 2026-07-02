@@ -26,20 +26,8 @@ const EMPTY: Form = {
   cta: "",
 };
 
-const EXAMPLE: Form = {
-  label: "New · Security",
-  title: "The SHIELD Incident API is live",
-  preview: "See ongoing incidents in real time, and report your own.",
-  summary:
-    "The SHIELD Incident API is now available. It reports any ongoing incident in real time, pulling directly from our internal circuit breakers and SHIELD.\n\nA GET request returns either `operational` or the current list of active incidents, each scoped to an affected chain, bridge, token, or address.",
-  highlights:
-    "Pull active incidents in real time from one endpoint\nReport incidents from your own systems\nBacked by our circuit breakers and SHIELD",
-  changelogUrl: "https://docs.near-intents.org/security-compliance/shield-incident-api",
-  cta: "Read the docs",
-};
-
 export default function ComposePage() {
-  const [form, setForm] = useState<Form>(EXAMPLE);
+  const [form, setForm] = useState<Form>(EMPTY);
   const [html, setHtml] = useState("");
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
 
