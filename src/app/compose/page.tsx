@@ -34,6 +34,7 @@ export default function ComposePage() {
   const [newEmail, setNewEmail] = useState("");
   const [testEmail, setTestEmail] = useState("");
   const [busy, setBusy] = useState<null | "test" | "send">(null);
+  const [confirmSend, setConfirmSend] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -134,7 +135,6 @@ export default function ComposePage() {
   }
 
   async function removeEmail(email: string) {
-    if (!window.confirm(`Remove ${email} from the list?`)) return;
     await fetch("/api/subscribers", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -155,8 +155,12 @@ export default function ComposePage() {
         setStatus({ kind: "err", msg: "Select at least one recipient." });
         return;
       }
-      if (!window.confirm(`Send to ${recipients.length} selected recipient(s)? This cannot be undone.`))
+      // First click arms the confirm; second click actually sends. No blocking dialog.
+      if (!confirmSend) {
+        setConfirmSend(true);
         return;
+      }
+      setConfirmSend(false);
     }
 
     setBusy(mode);
@@ -353,7 +357,11 @@ export default function ComposePage() {
                 className="flex-1 rounded-lg px-4 py-3 font-semibold text-white disabled:opacity-50"
                 style={{ backgroundColor: "#fb4d01" }}
               >
-                {busy === "send" ? "Sending…" : `Send to ${selected.size} selected`}
+                {busy === "send"
+                  ? "Sending…"
+                  : confirmSend
+                    ? `Click again to send to ${selected.size}`
+                    : `Send to ${selected.size} selected`}
               </button>
             </div>
 
