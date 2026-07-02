@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+:root {
+  --brand: #00ec97;
+  --brand-text: #0b3b2e;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+}
