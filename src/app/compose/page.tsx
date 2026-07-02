@@ -34,7 +34,7 @@ export default function ComposePage() {
   const [newEmail, setNewEmail] = useState("");
   const [testEmail, setTestEmail] = useState("");
   const [busy, setBusy] = useState<null | "test" | "send">(null);
-  const [confirmSend, setConfirmSend] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const debounce = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -143,24 +143,26 @@ export default function ComposePage() {
     await loadSubs();
   }
 
-  async function send(mode: "test" | "send") {
+  // Opens the confirmation modal for a real send.
+  function requestSend() {
+    setStatus(null);
+    if (selected.size === 0) {
+      setStatus({ kind: "err", msg: "Select at least one recipient." });
+      return;
+    }
+    setConfirmOpen(true);
+  }
+
+  async function performSend(mode: "test" | "send") {
     setStatus(null);
     if (mode === "test" && !testEmail) {
       setStatus({ kind: "err", msg: "Enter a test email address first." });
       return;
     }
     const recipients = [...selected];
-    if (mode === "send") {
-      if (recipients.length === 0) {
-        setStatus({ kind: "err", msg: "Select at least one recipient." });
-        return;
-      }
-      // First click arms the confirm; second click actually sends. No blocking dialog.
-      if (!confirmSend) {
-        setConfirmSend(true);
-        return;
-      }
-      setConfirmSend(false);
+    if (mode === "send" && recipients.length === 0) {
+      setStatus({ kind: "err", msg: "Select at least one recipient." });
+      return;
     }
 
     setBusy(mode);
@@ -345,23 +347,19 @@ export default function ComposePage() {
 
             <div className="flex gap-3">
               <button
-                onClick={() => send("test")}
+                onClick={() => performSend("test")}
                 disabled={busy !== null}
                 className="flex-1 rounded-lg border border-zinc-300 bg-white px-4 py-3 font-medium hover:bg-zinc-50 disabled:opacity-50"
               >
                 {busy === "test" ? "Sending test…" : "Send test"}
               </button>
               <button
-                onClick={() => send("send")}
+                onClick={requestSend}
                 disabled={busy !== null}
                 className="flex-1 rounded-lg px-4 py-3 font-semibold text-white disabled:opacity-50"
                 style={{ backgroundColor: "#fb4d01" }}
               >
-                {busy === "send"
-                  ? "Sending…"
-                  : confirmSend
-                    ? `Click again to send to ${selected.size}`
-                    : `Send to ${selected.size} selected`}
+                {busy === "send" ? "Sending…" : `Send to ${selected.size} selected`}
               </button>
             </div>
 
@@ -401,6 +399,42 @@ export default function ComposePage() {
           </div>
         </div>
       </div>
+      {confirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-zinc-900">
+              Send to {selected.size} recipient{selected.size === 1 ? "" : "s"}?
+            </h2>
+            <p className="mt-2 text-sm text-zinc-600">
+              This sends the email now and cannot be undone.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setConfirmOpen(false)}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setConfirmOpen(false);
+                  performSend("send");
+                }}
+                className="rounded-lg px-4 py-2 text-sm font-semibold text-white"
+                style={{ backgroundColor: "#fb4d01" }}
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
