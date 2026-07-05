@@ -1,11 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+type Recipient = { email: string; orgName: string | null };
 
 export default function RecipientsPage() {
-  const [emails, setEmails] = useState<string[]>([]);
+  const [items, setItems] = useState<Recipient[]>([]);
   const [text, setText] = useState("");
+  const [query, setQuery] = useState("");
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -13,7 +16,7 @@ export default function RecipientsPage() {
     try {
       const res = await fetch("/api/recipients");
       const data = await res.json();
-      if (res.ok) setEmails(data.recipients ?? []);
+      if (res.ok) setItems(data.details ?? []);
     } catch {
       /* ignore */
     }
@@ -22,6 +25,14 @@ export default function RecipientsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (r) => r.email.includes(q) || (r.orgName ?? "").toLowerCase().includes(q),
+    );
+  }, [items, query]);
 
   async function add(input: string) {
     if (!input.trim()) return;
@@ -55,25 +66,16 @@ export default function RecipientsPage() {
     e.target.value = "";
   }
 
-  async function remove(email: string) {
-    await fetch("/api/recipients", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    });
-    await load();
-  }
-
   return (
     <main className="min-h-screen bg-zinc-50 text-zinc-900">
       <div className="mx-auto max-w-2xl px-6 py-8">
         <header className="mb-6 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold">Recipients</h1>
-            <p className="text-sm text-zinc-500">{emails.length} saved. These are who you can send to.</p>
+            <p className="text-sm text-zinc-500">{items.length} saved. These are who you can send to.</p>
           </div>
           <Link href="/compose" className="text-sm font-medium text-[#fb4d01] hover:underline">
-            Compose →
+            Compose &rarr;
           </Link>
         </header>
 
@@ -81,7 +83,7 @@ export default function RecipientsPage() {
           <textarea
             className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-900"
             rows={4}
-            placeholder="paste emails — one per line, or separated by commas/spaces"
+            placeholder="paste emails, one per line or separated by commas/spaces"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -113,20 +115,30 @@ export default function RecipientsPage() {
         </div>
 
         <div className="mt-4 rounded-xl border border-zinc-200 bg-white">
-          {emails.length === 0 ? (
+          {items.length > 0 && (
+            <div className="flex items-center gap-3 border-b border-zinc-100 p-3">
+              <input
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search by email or organization…"
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm outline-none focus:border-zinc-900"
+              />
+              <span className="shrink-0 text-xs text-zinc-500">
+                {query.trim() ? `${filtered.length} of ${items.length}` : `${items.length}`}
+              </span>
+            </div>
+          )}
+          {items.length === 0 ? (
             <p className="py-10 text-center text-sm text-zinc-400">No recipients yet. Add some above.</p>
+          ) : filtered.length === 0 ? (
+            <p className="py-10 text-center text-sm text-zinc-400">No recipients match “{query.trim()}”.</p>
           ) : (
             <ul className="divide-y divide-zinc-100">
-              {emails.map((email) => (
-                <li key={email} className="flex items-center gap-3 px-4 py-2.5">
-                  <span className="flex-1 text-sm">{email}</span>
-                  <button
-                    onClick={() => remove(email)}
-                    className="text-xs text-zinc-400 hover:text-red-600"
-                    title="Remove"
-                  >
-                    ✕
-                  </button>
+              {filtered.map((r) => (
+                <li key={r.email} className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-50">
+                  <span className="flex-1 truncate text-sm text-zinc-900">{r.email}</span>
+                  <span className="truncate text-sm text-zinc-500">{r.orgName || ""}</span>
                 </li>
               ))}
             </ul>

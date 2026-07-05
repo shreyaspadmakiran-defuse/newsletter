@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { announcementInputSchema, buildAnnouncement } from "@/lib/announcement";
-import { createDraft, markSent } from "@/lib/drafts";
+import { createDraft, getDraft, markSent } from "@/lib/drafts";
 import { sendTest, sendToRecipients } from "@/lib/send";
+import { currentUserEmail } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,9 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const actor = await currentUserEmail();
+  if (!actor) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -40,19 +44,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Select at least one recipient." }, { status: 400 });
     }
 
-    // Record against a draft: reuse the loaded one, or auto-save so it shows in history.
+    // Record against a draft: reuse the loaded one (must be owned by the sender),
+    // or auto-save so it shows in history.
     let id = draftId ?? null;
     if (id === null) {
-      const created = await createDraft({
-        title: input.title,
-        label: input.label ?? "",
-        preview: input.preview,
-        summary: input.summary,
-        highlights: input.highlights ?? "",
-        changelogUrl: input.changelogUrl,
-        cta: input.cta ?? "",
-      });
+      const created = await createDraft(
+        {
+          title: input.title,
+          label: input.label ?? "",
+          preview: input.preview,
+          summary: input.summary,
+          highlights: input.highlights ?? "",
+          changelogUrl: input.changelogUrl,
+          cta: input.cta ?? "",
+        },
+        actor,
+      );
       id = created.id;
+    } else if (!(await getDraft(id, actor))) {
+      return NextResponse.json({ error: "Draft not found." }, { status: 404 });
     }
 
     const result = await sendToRecipients(announcement, list);
@@ -62,7 +72,7 @@ export async function POST(req: Request) {
         { status: 502 },
       );
     }
-    await markSent(id, list);
+    await markSent(id, list, actor);
 
     const failNote = result.failed ? `, ${result.failed} failed` : "";
     return NextResponse.json({

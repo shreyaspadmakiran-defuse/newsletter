@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { signOut } from "next-auth/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Form = {
   label: string;
@@ -33,7 +33,20 @@ export default function ComposePage() {
 
   // Recipients are loaded from the saved list (managed on /recipients).
   const [recipients, setRecipients] = useState<string[]>([]);
+  const [orgByEmail, setOrgByEmail] = useState<Record<string, string | null>>({});
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [recipientQuery, setRecipientQuery] = useState("");
+
+  const filteredRecipients = useMemo(() => {
+    const q = recipientQuery.trim().toLowerCase();
+    if (!q) return recipients;
+    return recipients.filter(
+      (email) => email.includes(q) || (orgByEmail[email] ?? "").toLowerCase().includes(q),
+    );
+  }, [recipients, orgByEmail, recipientQuery]);
+
+  const allFilteredSelected =
+    filteredRecipients.length > 0 && filteredRecipients.every((e) => selected.has(e));
 
   const [testEmail, setTestEmail] = useState("");
   const [busy, setBusy] = useState<null | "test" | "send">(null);
@@ -77,8 +90,10 @@ export default function ComposePage() {
       const res = await fetch("/api/recipients");
       const data = await res.json();
       if (res.ok) {
-        const list: string[] = data.recipients ?? [];
+        const details: { email: string; orgName: string | null }[] = data.details ?? [];
+        const list = details.map((d) => d.email);
         setRecipients(list);
+        setOrgByEmail(Object.fromEntries(details.map((d) => [d.email, d.orgName])));
         setSelected(new Set(list));
       }
     } catch {
@@ -313,14 +328,32 @@ export default function ComposePage() {
                   <Link href="/recipients" className="font-medium text-[#fb4d01] hover:underline">
                     Manage
                   </Link>
-                  <button className="text-zinc-500 hover:text-zinc-900" onClick={() => setSelected(new Set(recipients))}>
-                    Select all
-                  </button>
-                  <button className="text-zinc-500 hover:text-zinc-900" onClick={() => setSelected(new Set())}>
-                    Clear
+                  <button
+                    className="text-zinc-500 hover:text-zinc-900"
+                    disabled={filteredRecipients.length === 0}
+                    onClick={() =>
+                      setSelected((prev) => {
+                        const next = new Set(prev);
+                        if (allFilteredSelected) filteredRecipients.forEach((e) => next.delete(e));
+                        else filteredRecipients.forEach((e) => next.add(e));
+                        return next;
+                      })
+                    }
+                  >
+                    {allFilteredSelected ? "Deselect all" : "Select all"}
                   </button>
                 </div>
               </div>
+
+              {recipients.length > 0 && (
+                <input
+                  type="search"
+                  value={recipientQuery}
+                  onChange={(e) => setRecipientQuery(e.target.value)}
+                  placeholder="Search recipients…"
+                  className="mb-2 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-xs outline-none focus:border-zinc-900"
+                />
+              )}
 
               <div className="max-h-56 overflow-auto">
                 {recipients.length === 0 ? (
@@ -330,12 +363,15 @@ export default function ComposePage() {
                       Add some →
                     </Link>
                   </p>
+                ) : filteredRecipients.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-zinc-400">No matches.</p>
                 ) : (
                   <ul className="flex flex-col gap-1">
-                    {recipients.map((email) => (
+                    {filteredRecipients.map((email) => (
                       <li key={email} className="flex items-center gap-2 rounded px-1 py-1 hover:bg-zinc-50">
                         <input type="checkbox" checked={selected.has(email)} onChange={() => toggle(email)} />
-                        <span className="flex-1 text-sm">{email}</span>
+                        <span className="flex-1 truncate text-sm text-zinc-900">{email}</span>
+                        <span className="truncate text-sm text-zinc-500">{orgByEmail[email] || "—"}</span>
                       </li>
                     ))}
                   </ul>

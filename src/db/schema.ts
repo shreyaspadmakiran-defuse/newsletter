@@ -4,6 +4,8 @@ import { jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 export const recipients = pgTable("recipients", {
   id: serial("id").primaryKey(),
   email: text("email").notNull().unique(),
+  // Organization name from the import source (CSV/API). Null for manual adds.
+  orgName: text("org_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -28,6 +30,12 @@ export const drafts = pgTable("drafts", {
   status: text("status", { enum: ["draft", "sent"] })
     .notNull()
     .default("draft"),
+  // Email of the signed-in user who created/owns this draft.
+  createdBy: text("created_by"),
+  // Email of the user who last edited this draft.
+  updatedBy: text("updated_by"),
+  // Email of the user who actually sent it (null until sent).
+  sentBy: text("sent_by"),
   // The emails this draft was sent to (null until sent).
   recipients: jsonb("recipients").$type<string[]>(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

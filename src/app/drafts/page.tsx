@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listDrafts } from "@/lib/drafts";
+import { currentUserEmail } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic"; // always read fresh from the DB
@@ -13,7 +14,8 @@ function fmt(date: Date | null): string {
 }
 
 export default async function DraftsPage() {
-  const drafts = await listDrafts();
+  const owner = await currentUserEmail();
+  const drafts = owner ? await listDrafts(owner) : [];
 
   return (
     <main className="min-h-screen bg-zinc-50 text-zinc-900">
@@ -54,9 +56,13 @@ export default async function DraftsPage() {
                       <p className="mt-1 text-sm text-zinc-500">
                         Sent {fmt(d.sentAt)} to {d.recipients?.length ?? 0} recipient
                         {(d.recipients?.length ?? 0) === 1 ? "" : "s"}
+                        {d.sentBy ? ` by ${d.sentBy}` : ""}
                       </p>
                     ) : (
-                      <p className="mt-1 text-sm text-zinc-400">Last edited {fmt(d.updatedAt)}</p>
+                      <p className="mt-1 text-sm text-zinc-400">
+                        Last edited {fmt(d.updatedAt)}
+                        {d.updatedBy ? ` by ${d.updatedBy}` : ""}
+                      </p>
                     )}
                   </div>
                   <Link

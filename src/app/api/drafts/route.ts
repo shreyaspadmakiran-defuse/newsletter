@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createDraft, listDrafts } from "@/lib/drafts";
+import { currentUserEmail } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -15,14 +16,18 @@ const draftSchema = z.object({
 });
 
 export async function GET() {
-  return NextResponse.json({ drafts: await listDrafts() });
+  const owner = await currentUserEmail();
+  if (!owner) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return NextResponse.json({ drafts: await listDrafts(owner) });
 }
 
 export async function POST(req: Request) {
+  const owner = await currentUserEmail();
+  if (!owner) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const parsed = draftSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: "Invalid draft." }, { status: 400 });
   }
-  const draft = await createDraft(parsed.data);
+  const draft = await createDraft(parsed.data, owner);
   return NextResponse.json({ draft });
 }
