@@ -16,6 +16,21 @@ export const announcementInputSchema = z.object({
 
 export type AnnouncementInput = z.infer<typeof announcementInputSchema>;
 
+/**
+ * Lenient schema for the live preview: every field is optional and defaults to
+ * empty, so the preview renders as soon as the user starts typing (no required
+ * fields, no URL validation). Sending still uses the strict schema above.
+ */
+export const previewInputSchema = z.object({
+  label: z.string().optional().default(""),
+  title: z.string().optional().default(""),
+  preview: z.string().optional().default(""),
+  summary: z.string().optional().default(""),
+  highlights: z.string().optional().default(""),
+  changelogUrl: z.string().optional().default(""),
+  cta: z.string().optional().default(""),
+});
+
 /** Convert freeform form input into a structured Announcement. */
 export function buildAnnouncement(input: AnnouncementInput): Announcement {
   const summary = input.summary
